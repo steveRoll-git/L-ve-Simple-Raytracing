@@ -2,7 +2,7 @@ local love = love
 local lg = love.graphics
 
 local function formatSeconds(sec)
-  return math.floor(sec / 60) .. " minutes " .. math.floor(sec % 60) .. " seconds"
+	return math.floor(sec / 60) .. " minutes " .. math.floor(sec % 60) .. " seconds"
 end
 
 lg.setDefaultFilter("nearest", "nearest")
@@ -76,7 +76,7 @@ function love.draw()
 	if img then
 		lg.draw(img, 0, 0, 0, scale, scale)
 	end
-  lg.print(str)
+	lg.print(str)
 	lg.setColor(1,1,1, 0.7)
 	lg.rectangle("line", progressBar.x, progressBar.y, progressBar.w, progressBar.h)
 	lg.rectangle("fill", progressBar.x, progressBar.y, progressBar.fillW, progressBar.h)
