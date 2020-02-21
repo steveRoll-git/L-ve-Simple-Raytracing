@@ -151,8 +151,8 @@ local ray = {
 local camMatrix = mat4()
 
 local function screen()
-  for x=0, imgData:getWidth() - 1 do
-    for y=0, imgData:getHeight() - 1 do
+	for y=0, imgData:getHeight() - 1 do
+		for x=0, imgData:getWidth() - 1 do
       ray.direction.x = (x / screenW - 0.5) * 2 * ratio
       ray.direction.y = -(y / screenH - 0.5) * 2
       ray.direction.z = -1
@@ -168,6 +168,7 @@ local function screen()
       local color = castRay(ray)
       imgData:setPixel(x, y, color.x, color.y, color.z, 1)
     end
+		love.thread.getChannel("renderProgress"):push(y)
   end
 end
 
