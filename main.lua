@@ -1,214 +1,66 @@
 local love = love
 local lg = love.graphics
 
-lg.setDefaultFilter("nearest", "nearest")
-
-local math = math
-local floor = math.floor
-
 local function formatSeconds(sec)
   return math.floor(sec / 60) .. " minutes " .. math.floor(sec % 60) .. " seconds"
 end
 
-local tiny = 0.00000000000001
-
-local cpml = require "cpml"
-local vec3 = cpml.vec3
-local intersect = cpml.intersect
-local mat4 = cpml.mat4
-
-local function reflect(dir, normal)
-  local dot = vec3.dot(dir, normal)
-  return dir - (normal * (2 * dot))
-end
-
-local function vectorAngle(a, b)
-  return math.acos(a:dot(b) / (a:len() * b:len()))
-end
-
-local function withinCone(a, b, angle)
-  return vectorAngle(a, b) <= angle
-end
-
-local skyColor1 = vec3(63/255, 88/255, 226/255)
-local skyColor2 = vec3(173/255, 226/255, 255/255)
-
-local shadowMul = 0.5
-
---local planeColor1 = vec3(0.2, 0.9, 0.2)
---local planeColor2 = vec3(0.1, 0.4, 0.1)
-local planeColor1 = vec3(0.9, 0.9, 0.9)
-local planeColor2 = vec3(0.8, 0.8, 0.8)
-
-local function sphereNormal(pos, obj)
-  return (pos - obj.position):normalize()
-end
-
-local objects = {
-  {
-    intersect = intersect.ray_plane,
-    position = vec3(0, -1, 0),
-    normal = vec3(0, 1, 0),
-    cNormal = function(position, obj)
-      return (obj.normal + vec3(0, 0, math.sin(((position.x - obj.position.x)^2 + (position.z - obj.position.z)^2)^0.5 * 50) * 0.05)):normalize()
-    end,
-    color = function(position)
-      return (floor(position.x) + floor(position.z) % 2) % 2 == 0 and planeColor1 or planeColor2
-    end,
-    reflect = 1,
-  },
-  {
-    intersect = intersect.ray_sphere,
-    position = vec3(-0.8, -0.5, 0),
-    radius = 0.5,
-    color = vec3(1, 0, 0),
-    cNormal = sphereNormal,
-    noShadow = true,
-  },
-  {
-    intersect = intersect.ray_sphere,
-    position = vec3(0.8, -0.5, 0),
-    radius = 0.5,
-    color = vec3(1, 1, 1),
-    cNormal = sphereNormal,
-    reflect = 1,
-    noShadow = true,
-  }
-}
-
-local sunDir = vec3(1, 1, 0.5):normalize()
-
-local sunColor = vec3(0.9, 0.9, 0.8)
-local sunAngle = 0.1
-
-local maxBounces = 4
-
-local function castRay(ray, shadowCheck, count, ignore)
-  count = count or 1
-  
-  local lastInter
-  
-  for _, obj in pairs(objects) do
-    if obj ~= ignore then
-      local pos, dist = obj.intersect(ray, obj)
-      if pos and (not lastInter or dist < lastInter.dist) then
-        if shadowCheck then return true end
-        lastInter = {pos=pos, dist=dist, obj=obj}
-      end
-    end
-  end
-  
-  if lastInter then
-    local color = lastInter.obj.color
-    color = type(color) == "function" and color(lastInter.pos) or color
-    
-    local normal = lastInter.obj.cNormal or lastInter.obj.normal
-    normal = type(normal) == "function" and normal(lastInter.pos, lastInter.obj) or normal
-    
-    local hitPos = lastInter.pos + normal * tiny
-    
-    if lastInter.obj.reflect and count < maxBounces then
-      local reflection = castRay({position = hitPos, direction = reflect(ray.direction, normal)}, false, count + 1)
-      
-      color = color * (reflection * lastInter.obj.reflect)
-    end
-    
-    color = color * math.max(vec3.dot(sunDir, normal) ^ 0.7, shadowMul ^ 2)
-    
-    if not lastInter.obj.noShadow then
-      local shadow = castRay({position = hitPos, direction = sunDir}, true, 0, lastInter.obj)
-      
-      if shadow then
-        color = color * shadowMul
-      end
-    end
-    
-    return color
-  end
-  
-  if shadowCheck then return false end
-  
-  local angle = vectorAngle(ray.direction, sunDir)
-  
-  local skyColor = vec3.lerp(skyColor1, skyColor2, ray.direction.y ^ 2)
-  
-  return angle <= sunAngle and vec3.lerp(sunColor, skyColor, (angle / sunAngle) ^ 5) or skyColor
-end
+lg.setDefaultFilter("nearest", "nearest")
 
 local scale = 1
 
-local imgData = love.image.newImageData(lg.getWidth() / scale, lg.getHeight() / scale)
-local screenW, screenH = imgData:getDimensions()
+local screenW, screenH = lg.getWidth() / scale, lg.getHeight() / scale
 
-local ratio = screenW / screenH
+local thread = love.thread.newThread("rendering.lua")
+thread:start(screenW, screenH)
 
-local origCamPosition = vec3(0, 0.5, 2)
+local imgData
+local img
 
-local ray = {
-  position = origCamPosition,
-  direction = vec3(),
-  direction4 = {}
-}
+local imgDataChannel = love.thread.getChannel("imageDataObject")
+local frameCompleteChannel = love.thread.getChannel("frameComplete")
+local renderInfoChannel = love.thread.getChannel("renderInfo")
 
-local camMatrix = mat4()
+local frames
 
-local function screen()
-  for x=0, imgData:getWidth() - 1 do
-    for y=0, imgData:getHeight() - 1 do
-      ray.direction.x = (x / screenW - 0.5) * 2 * ratio
-      ray.direction.y = -(y / screenH - 0.5) * 2
-      ray.direction.z = -1
-      ray.direction = ray.direction:normalize()
-      ray.direction4[1] = ray.direction.x
-      ray.direction4[2] = ray.direction.y
-      ray.direction4[3] = ray.direction.z
-      ray.direction4[4] = 0
-      mat4.mul_vec4(ray.direction4, camMatrix, ray.direction4)
-      ray.direction.x = ray.direction4[1]
-      ray.direction.y = ray.direction4[2]
-      ray.direction.z = ray.direction4[3]
-      local color = castRay(ray)
-      imgData:setPixel(x, y, color.x, color.y, color.z, 1)
-    end
-  end
+local currentFrame = 1
+
+local str = "waiting for info..."
+
+local lastTime = love.timer.getTime()
+
+function love.update(dt)
+	if not imgData then
+		local data = imgDataChannel:pop()
+		if data then
+			imgData = data
+		end
+	end
+	
+	if not frames then
+		local renderInfo = renderInfoChannel:pop()
+		if renderInfo then
+			frames = renderInfo.frames
+			str = "rendering " .. currentFrame .. "/" .. frames
+		end
+	end
+	
+	local frameComplete = frameCompleteChannel:pop()
+	if frameComplete then
+		if img then
+			img:replacePixels(imgData)
+		else
+			img = lg.newImage(imgData)
+		end
+		currentFrame = currentFrame + 1
+		str = "rendering " .. currentFrame .. "/" .. frames .. "\nest. remaining: " .. formatSeconds((love.timer.getTime() - lastTime) * (frames - currentFrame - 1))
+		lastTime = love.timer.getTime()
+	end
 end
-
-local maxIters = 20
-
-local img = lg.newImage(imgData)
-
-local startTime = love.timer.getTime()
-
-for i=0, maxIters - 1 do
-  love.event.pump()
-  for name, a,b,c,d,e,f in love.event.poll() do
-    if name == "quit" then
-      if not love.quit or not love.quit() then
-        return a or 0
-      end
-    end
-    love.handlers[name](a,b,c,d,e,f)
-  end
-  -----
-  local start = love.timer.getTime()
-  camMatrix:identity()
-  local angle = i / maxIters * math.pi * 2
-  camMatrix:rotate(camMatrix, angle, vec3.unit_y) -- rotate
-  ray.position = camMatrix * origCamPosition
-  camMatrix:rotate(camMatrix, -0.5, vec3.unit_x) -- look down
-  screen()
-  imgData:encode("png", "thing_" .. i .. ".png")
-  local duration = love.timer.getTime() - start
-  lg.clear()
-  img:replacePixels(imgData)
-  lg.draw(img, 0, 0, 0, scale, scale)
-  lg.print(i + 1 .. "/" .. maxIters .. "\nest. remaining: " .. formatSeconds((maxIters - i - 1) * duration))
-  lg.present()
-end
-
-local str = "took " .. formatSeconds(love.timer.getTime() - startTime)
 
 function love.draw()
-  lg.draw(img, 0, 0, 0, scale, scale)
+	if img then
+		lg.draw(img, 0, 0, 0, scale, scale)
+	end
   lg.print(str)
 end
